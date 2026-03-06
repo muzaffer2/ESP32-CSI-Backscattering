@@ -45,6 +45,9 @@ class CSIDataLogger:
         # This helps populate the dropdown menu in the web UI
         self.available_subcarriers = set()
         
+        # Save raw serial lines for debugging
+        self.raw_lines = deque(maxlen=50)
+        
     def connect(self):
         """Try to connect to the ESP32 over serial port"""
         try:
@@ -57,24 +60,37 @@ class CSIDataLogger:
 
     def setup_csv_file(self):
         """Create a new CSV file for this logging session"""
-        # Create filename with timestamp so we know when the data was collected
-        timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-        filename = f"csi_data_{timestamp}.csv"
-        filepath = os.path.join(self.session_dir, filename)
-        
-        self.csv_file = open(filepath, 'w', newline='')
-        
-        # Define what data we'll store in each row
-        fieldnames = [
-            'timestamp', 'rssi', 'rate', 'channel', 'bandwidth', 
-            'data_length', 'esp_timestamp', 'csi_data'
-        ]
-        
-        self.csv_writer = csv.DictWriter(self.csv_file, fieldnames=fieldnames)
-        self.csv_writer.writeheader()
-        
-        print(f"Created CSV file: {filepath}")
-        return filepath
+        try:
+            # Create filename with timestamp so we know when the data was collected
+            timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f"csi_data_{timestamp}.csv"
+            filepath = os.path.join(self.session_dir, filename)
+            
+            # Ensure directory exists
+            os.makedirs(self.session_dir, exist_ok=True)
+            print(f"[CSV] Session directory: {os.path.abspath(self.session_dir)}")
+            
+            self.csv_file = open(filepath, 'w', newline='')
+            print(f"[CSV] File opened: {os.path.abspath(filepath)}")
+            
+            # Define what data we'll store in each row
+            fieldnames = [
+                'timestamp', 'rssi', 'rate', 'channel', 'bandwidth', 
+                'data_length', 'esp_timestamp', 'csi_data'
+            ]
+            
+            self.csv_writer = csv.DictWriter(self.csv_file, fieldnames=fieldnames)
+            self.csv_writer.writeheader()
+            self.csv_file.flush()
+            
+            print(f"[CSV] CSV writer initialized. File: {filepath}")
+            print(f"[CSV] Headers written: {fieldnames}")
+            return filepath
+        except Exception as e:
+            print(f"[ERROR] Failed to setup CSV file: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
     
     def parse_csi_line(self, line):
         """Extract CSI data from the ESP32's output format
@@ -87,21 +103,30 @@ class CSIDataLogger:
         2. Parse it into a Python dictionary
         3. Return the parsed data or None if something goes wrong
         """
-        print(f"Attempting to parse line: {line[:200]}...")  # Debug log
-        match = re.search(r'CSI_START(\{.*?\})CSI_END', line)
+        # Try different regex patterns to handle various formats
+        patterns = [
+            r'CSI_START(\{[^{}]*\})CSI_END',  # Original strict pattern
+            r'CSI_START(\{.*?\})CSI_END',     # Non-greedy pattern
+            r'\{["rssi".*?csi_data.*?\]\}'  # Direct JSON pattern
+        ]
+        
+        match = None
+        for pattern in patterns:
+            match = re.search(pattern, line)
+            if match:
+                break
         
         if match:
             try:
-                json_str = match.group(1)
-                print(f"Found JSON string: {json_str[:200]}...")  # Debug log
+                json_str = match.group(1) if '"' in match.group(1) else match.group(0)
                 data = json.loads(json_str)
-                print(f"Successfully parsed JSON data: {str(data)[:200]}...")  # Debug log
+                print(f"[SUCCESS] Parsed CSI packet: RSSI={data.get('rssi')}dBm, CH={data.get('channel')}, LEN={len(data.get('csi_data', []))} subcarriers")
                 return data
             except json.JSONDecodeError as e:
-                print(f"JSON decode error: {e}")
-                print(f"Problematic JSON string: {json_str}")  # Debug log
+                print(f"[ERROR] JSON parse failed: {e}")
+                print(f"[ERROR] Attempted to parse: {json_str[:200]}...")
         else:
-            print("No CSI_START/CSI_END markers found in line")  # Debug log
+            print(f"[WARNING] No CSI_START/CSI_END found in: {line[:100]}...")
         
         return None
     
@@ -132,8 +157,6 @@ class CSIDataLogger:
             print("No CSI data provided")
             return {}
         
-        print(f"Processing subcarriers {subcarrier_indices} with CSI data length {len(csi_data)}")
-        print(f"First 10 CSI values: {csi_data[:10]}")  # Debug log
         result = {}
         
         for idx in subcarrier_indices:
@@ -142,14 +165,12 @@ class CSIDataLogger:
                     # Get the raw value for this subcarrier
                     value = csi_data[idx]
                     result[f'subcarrier_{idx}'] = value
-                    print(f"Subcarrier {idx} value: {value}")
                 else:
-                    print(f"Subcarrier {idx} index out of range (idx={idx}, len={len(csi_data)})")
+                    print(f"Subcarrier {idx} index out of range (len={len(csi_data)})")
                     result[f'subcarrier_{idx}'] = 0
                     
             except (TypeError, ValueError, IndexError) as e:
                 print(f"Error processing subcarrier {idx}: {e}")
-                print(f"Problematic value: {csi_data[idx] if idx < len(csi_data) else 'out of range'}")  # Debug log
                 result[f'subcarrier_{idx}'] = 0
         
         return result
@@ -193,88 +214,96 @@ class CSIDataLogger:
         """
         try:
             print("Starting CSI data collection...")
+            print(f"CSV file: {self.csv_filename}")
+            print(f"CSV writer initialized: {self.csv_writer is not None}")
             
             while self.is_running:
                 if self.serial_conn and self.serial_conn.in_waiting > 0:
                     try:
                         # Read a line from the ESP32
                         line = self.serial_conn.readline().decode('utf-8', errors='ignore').strip()
-                        print(f"Raw line from serial: {line[:200]}...")  # Debug log
+                        # store raw line for debugging
+                        if line:
+                            self.raw_lines.append(line)
                         
                         if line:
                             # Try to parse the CSI data
                             csi_data = self.parse_csi_line(line)
                             
                             if csi_data:
-                                print(f"Successfully parsed CSI data with keys: {list(csi_data.keys())}")  # Debug log
-                                python_timestamp = datetime.datetime.now().isoformat()
-                                current_time = time.time()
-                                
-                                # Get the CSI array and analyze its structure
-                                csi_array = csi_data.get('csi_data', [])
-                                print(f"CSI array length: {len(csi_array)}")  # Debug log
-                                print(f"First 10 CSI values: {csi_array[:10]}")  # Debug log
-                                self.analyze_csi_structure(csi_array)
-                                
-                                # Prepare the row for the CSV file
-                                row = {
-                                    'timestamp': python_timestamp,
-                                    'rssi': csi_data.get('rssi', ''),
-                                    'rate': csi_data.get('rate', ''),
-                                    'channel': csi_data.get('channel', ''),
-                                    'bandwidth': csi_data.get('bandwidth', ''),
-                                    'data_length': csi_data.get('len', ''),
-                                    'esp_timestamp': csi_data.get('timestamp', ''),
-                                    'csi_data': json.dumps(csi_array)
-                                }
-                                
-                                # Save to CSV
-                                if self.csv_writer:
-                                    self.csv_writer.writerow(row)
-                                    self.csv_file.flush()  # Make sure data is written to disk
-                                    print(f"Wrote packet #{self.packet_count} to CSV")  # Debug log
-                                
-                                # Update the data structures used by the web UI
-                                self.packet_count += 1
-                                display_data = {
-                                    'packet_num': self.packet_count,
-                                    'timestamp': python_timestamp,
-                                    'rssi': csi_data.get('rssi', 0),
-                                    'rate': csi_data.get('rate', 0),
-                                    'channel': csi_data.get('channel', 0),
-                                    'bandwidth': csi_data.get('bandwidth', 0),
-                                    'data_length': csi_data.get('len', 0),
-                                    'esp_timestamp': csi_data.get('esp_timestamp', 0),
-                                    'time_passed': current_time - self.session_start_time if self.session_start_time else 0
-                                }
-                                
-                                # Add subcarrier data to display
-                                for i in range(len(csi_array)):
-                                    display_data[f'subcarrier_{i}'] = csi_array[i]
-                                
-                                # Update the data structures for the web UI
-                                self.recent_data.append(display_data)
-                                self.latest_packet = display_data
-                                
-                                # Store data for plotting
-                                plot_point = {
-                                    'time': current_time,
-                                    'rssi': csi_data.get('rssi', 0)
-                                }
-                                
-                                # Add all CSI values to the plot data
-                                for i in range(len(csi_array)):
-                                    plot_point[f'subcarrier_{i}'] = csi_array[i]
-                                
-                                self.plot_data.append(plot_point)
-                                print(f"Added plot point: {plot_point}")
-                                
-                                print(f"CSI packet #{self.packet_count} - RSSI: {csi_data.get('rssi')}dBm")
+                                try:
+                                    python_timestamp = datetime.datetime.now().isoformat()
+                                    current_time = time.time()
+                                    
+                                    # Get the CSI array and analyze its structure
+                                    csi_array = csi_data.get('csi_data', [])
+                                    self.analyze_csi_structure(csi_array)
+                                    
+                                    # Prepare the row for the CSV file
+                                    row = {
+                                        'timestamp': python_timestamp,
+                                        'rssi': csi_data.get('rssi', ''),
+                                        'rate': csi_data.get('rate', ''),
+                                        'channel': csi_data.get('channel', ''),
+                                        'bandwidth': csi_data.get('bandwidth', ''),
+                                        'data_length': csi_data.get('data_length', ''),  # Changed from 'len' to 'data_length'
+                                        'esp_timestamp': csi_data.get('esp_timestamp', ''),  # Changed from 'timestamp' to 'esp_timestamp'
+                                        'csi_data': json.dumps(csi_array)
+                                    }
+                                    
+                                    # Save to CSV - with extra error checking
+                                    if self.csv_writer and self.csv_file:
+                                        try:
+                                            self.csv_writer.writerow(row)
+                                            self.csv_file.flush()  # Make sure data is written to disk
+                                            print(f"[CSV] Wrote packet #{self.packet_count + 1} to {self.csv_filename}")
+                                        except Exception as csv_error:
+                                            print(f"[ERROR] Failed to write CSV row: {csv_error}")
+                                    else:
+                                        print(f"[ERROR] CSV writer or file not initialized! Writer={self.csv_writer}, File={self.csv_file}")
+                                    
+                                    # Update the data structures used by the web UI
+                                    self.packet_count += 1
+                                    display_data = {
+                                        'packet_num': self.packet_count,
+                                        'timestamp': python_timestamp,
+                                        'rssi': csi_data.get('rssi', 0),
+                                        'rate': csi_data.get('rate', 0),
+                                        'channel': csi_data.get('channel', 0),
+                                        'bandwidth': csi_data.get('bandwidth', 0),
+                                        'data_length': csi_data.get('len', 0),
+                                        'esp_timestamp': csi_data.get('esp_timestamp', 0),
+                                        'time_passed': current_time - self.session_start_time if self.session_start_time else 0
+                                    }
+                                    
+                                    # Add subcarrier data to display
+                                    for i in range(len(csi_array)):
+                                        display_data[f'subcarrier_{i}'] = csi_array[i]
+                                    
+                                    # Update the data structures for the web UI
+                                    self.recent_data.append(display_data)
+                                    self.latest_packet = display_data
+                                    
+                                    # Store data for plotting
+                                    plot_point = {
+                                        'time': current_time,
+                                        'rssi': csi_data.get('rssi', 0)
+                                    }
+                                    
+                                    # Add all CSI values to the plot data
+                                    for i in range(len(csi_array)):
+                                        plot_point[f'subcarrier_{i}'] = csi_array[i]
+                                    
+                                    self.plot_data.append(plot_point)
+                                    
+                                except Exception as e:
+                                    print(f"[ERROR] Error processing parsed CSI data: {e}")
+                                    import traceback
+                                    traceback.print_exc()
                             
                             else:
-                                # Print any other output from the ESP32
-                                if line and not line.startswith('CSI_START'):
-                                    print(f"ESP32: {line}")
+                                # Print non-CSI output from the ESP32 (connection messages, etc.)
+                                print(f"ESP32: {line}")
                     except Exception as e:
                         print(f"Error processing serial line: {e}")
                         import traceback
@@ -330,6 +359,10 @@ class CSIDataLogger:
         where users can select which subcarriers to plot.
         """
         return sorted(list(self.available_subcarriers))
+    
+    def get_raw_lines(self):
+        """Return recent raw lines received from the serial port for debugging"""
+        return list(self.raw_lines)
     
     def get_plot_data(self, selected_subcarriers=None):
         """Return data formatted for plotting with configurable subcarriers"""
@@ -654,7 +687,7 @@ def home():
                 </div>
                 
                 <div style="margin-top: 15px;">
-                    <input type="text" id="port-input" placeholder="COM3 or /dev/ttyUSB0" style="padding: 8px; width: 200px;">
+                    <input type="text" id="port-input" placeholder="COM9 or /dev/ttyUSB0" style="padding: 8px; width: 200px;">
                     <button class="btn-primary" onclick="connect()">Connect</button>
                     <button class="btn-danger" onclick="disconnect()">Disconnect</button>
                     <button class="btn-success" onclick="startLogging()">Start Logging</button>
@@ -949,18 +982,31 @@ def home():
                             logDiv.scrollTop = 0;
                         }
                     });
+            
+            // also fetch raw serial lines for debugging
+            fetch('/api/raw')
+                .then(response => response.json())
+                .then(lines => {
+                    if (lines && lines.length) {
+                        console.log('raw lines:', lines.slice(-10));
+                    }
+                });
             }
             
             function connect() {
-                const port = document.getElementById('port-input').value || 'COM3';
+                const port = document.getElementById('port-input').value || 'COM9';
                 fetch('/api/connect', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({port: port})
-                }).then(() => {
-                    // Update available subcarriers after connection
-                    setTimeout(initializeSubcarrierDropdowns, 2000);
-                });
+                }).then(response => response.json())
+                  .then(data => {
+                      console.log('connect response', data);
+                      // Update available subcarriers after connection
+                      setTimeout(initializeSubcarrierDropdowns, 2000);
+                      // refresh status right away
+                      updateStatus();
+                  });
             }
             
             function disconnect() {
@@ -1044,11 +1090,25 @@ def api_plot_data():
         return jsonify(plot_data)
     return jsonify({'time': [], 'rssi': [], 'subcarriers': {}})
 
+@app.route('/api/raw')
+def api_raw():
+    if logger:
+        raw_data = logger.get_raw_lines()
+        # Show detailed info about raw lines
+        print(f"[DEBUG] Raw lines count: {len(raw_data)}")
+        if raw_data:
+            print(f"[DEBUG] Last raw line: {raw_data[-1][:200]}")
+        return jsonify(raw_data)
+    return jsonify([])
+
 @app.route('/api/connect', methods=['POST'])
 def api_connect():
     global logger
     data = request.get_json()
-    port = data.get('port', 'COM3')
+    port = data.get('port', 'COM9')
+    print(f"\n{'='*60}")
+    print(f"[API] api_connect called with port={port}")
+    print(f"{'='*60}\n")
     
     # Close existing connection
     if logger:
@@ -1057,8 +1117,21 @@ def api_connect():
     
     logger = CSIDataLogger(port)
     success = logger.connect()
+    print(f"[API] Connected={success}, port={port}")
     
-    return jsonify({'success': success, 'port': port})
+    # If connected successfully, start logging immediately
+    started = False
+    if success:
+        try:
+            started = logger.start_logging()
+            print(f"[API] Logging started={started}")
+        except Exception as e:
+            print(f"[API] Error starting logging: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    print(f"[API] Final status: connected={success}, logging={started}\n")
+    return jsonify({'success': success, 'port': port, 'logging': started})
 
 @app.route('/api/disconnect', methods=['POST'])
 def api_disconnect():

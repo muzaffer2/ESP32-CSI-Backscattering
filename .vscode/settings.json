@@ -1,14 +1,6 @@
 {
   "C_Cpp.intelliSenseEngine": "default",
-  "idf.espIdfPathWin": "C:\\Users\\viveca\\esp\\v5.4.1\\esp-idf",
-  "idf.pythonInstallPath": "C:\\Users\\viveca\\.espressif\\tools\\idf-python\\3.11.2\\python.exe",
-  "idf.openOcdConfigs": [
-    "board/esp32-bridge.cfg"
-  ],
-  "idf.portWin": "COM3",
-  "idf.toolsPathWin": "C:\\Users\\viveca\\.espressif",
-  "idf.customExtraVars": {
-    "IDF_TARGET": "esp32"
-  },
-  "idf.flashType": "UART"
+  "idf.currentSetup": "C:\\esp\\v5.5.3\\esp-idf",
+  "idf.flashType": "UART",
+  "idf.portWin": "COM9"
 }

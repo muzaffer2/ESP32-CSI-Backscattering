@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -15,8 +16,8 @@
 static const char *TAG = "csi_example";
 
 // WiFi credentials
-#define WIFI_SSID "hsgdsgsd"
-#define WIFI_PASS "hsgsdfadg"
+#define WIFI_SSID "beemo"
+#define WIFI_PASS "12345678"
 
 // FreeRTOS task handles
 static TaskHandle_t wifi_task_handle = NULL;
@@ -63,13 +64,14 @@ static void csi_processing_task(void *pvParameters) {
         // Wait for CSI data from queue
         if (xQueueReceive(csi_queue, &csi_data, portMAX_DELAY)) {
             // Print CSI header info as JSON for easy Python parsing
+            // Format must match Python CSV fieldnames exactly!
             printf("CSI_START{");
             printf("\"rssi\":%d,", csi_data.csi_info.rx_ctrl.rssi);
             printf("\"rate\":%d,", csi_data.csi_info.rx_ctrl.rate);
             printf("\"channel\":%d,", csi_data.csi_info.rx_ctrl.channel);
             printf("\"bandwidth\":%d,", csi_data.csi_info.rx_ctrl.cwb);
-            printf("\"len\":%d,", csi_data.csi_info.len);
-            printf("\"timestamp\":%lld,", csi_data.timestamp);
+            printf("\"data_length\":%d,", csi_data.csi_info.len);  // Changed from "len" to "data_length"
+            printf("\"esp_timestamp\":%lld,", csi_data.timestamp); // Changed from "timestamp" to "esp_timestamp"
             
             // The actual CSI data is in info->buf
             // Output ALL CSI data as comma-separated values
@@ -97,12 +99,16 @@ static void event_handler(void* arg, esp_event_base_t event_base, int32_t event_
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
         // WiFi started, now try to connect
         esp_wifi_connect();
-        ESP_LOGI(TAG, "WiFi started, trying to connect...");
+        ESP_LOGI(TAG, "WiFi started, trying to connect to '%s'...", WIFI_SSID);
     } 
     else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        // Lost connection, try to reconnect
+        // Lost connection, try to reconnect with a slight delay
+        wifi_event_sta_disconnected_t* disconnected = (wifi_event_sta_disconnected_t*) event_data;
+        ESP_LOGI(TAG, "Disconnected from WiFi (reason: %d), retrying in 3 seconds...", disconnected->reason);
+        
+        // Wait 3 seconds before reconnecting to avoid rapid reconnect loops
+        vTaskDelay(3000 / portTICK_PERIOD_MS);
         esp_wifi_connect();
-        ESP_LOGI(TAG, "Disconnected, trying to reconnect...");
     } 
     else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         // Successfully connected and got an IP address!
@@ -150,19 +156,32 @@ static void wifi_init_task(void *pvParameters) {
     //The event_handler function responds to WiFi events like "started", "connected", "disconnected"
 
     //Configure WiFi settings
-    wifi_config_t wifi_config = {
-        .sta = {
-            .ssid = CONFIG_SSID,
-            .password = CONFIG_PASSWORD,
-            .threshold.authmode = WIFI_AUTH_WPA2_PSK, // Security type
-        },
-    };
+    wifi_config_t wifi_config = {};  // Zero out the entire structure
+    memset(&wifi_config, 0, sizeof(wifi_config_t));
+    
+    // Properly copy SSID and password and null-terminate
+    size_t ssid_len = strlen(WIFI_SSID);
+    size_t pass_len = strlen(WIFI_PASS);
+    
+    memcpy(wifi_config.sta.ssid, WIFI_SSID, ssid_len);
+    wifi_config.sta.ssid[ssid_len] = '\0';
+    
+    memcpy(wifi_config.sta.password, WIFI_PASS, pass_len);
+    wifi_config.sta.password[pass_len] = '\0';
+    
+    // Try WPA2 first, but allow fallback to other auth modes
+    wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+    wifi_config.sta.pmf_cfg.capable = true;
+    wifi_config.sta.pmf_cfg.required = false;
 
     //set the wifi controller to be a station
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
 
     //Give the ESP32 your WiFi credentials
+    ESP_LOGI(TAG, "Setting WiFi credentials - SSID: '%s', Password: '%s'", WIFI_SSID, WIFI_PASS);
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+    
+    ESP_LOGI(TAG, "WiFi config set successfully");
 
     //Actually start trying to connect
     ESP_ERROR_CHECK(esp_wifi_start());
