@@ -687,7 +687,7 @@ def home():
                 </div>
                 
                 <div style="margin-top: 15px;">
-                    <input type="text" id="port-input" placeholder="COM9 or /dev/ttyUSB0" style="padding: 8px; width: 200px;">
+                    <input type="text" id="port-input" placeholder="COM5 or /dev/ttyUSB0" style="padding: 8px; width: 200px;">
                     <button class="btn-primary" onclick="connect()">Connect</button>
                     <button class="btn-danger" onclick="disconnect()">Disconnect</button>
                     <button class="btn-success" onclick="startLogging()">Start Logging</button>
@@ -994,7 +994,7 @@ def home():
             }
             
             function connect() {
-                const port = document.getElementById('port-input').value || 'COM9';
+                const port = document.getElementById('port-input').value || 'COM5';
                 fetch('/api/connect', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
@@ -1105,7 +1105,7 @@ def api_raw():
 def api_connect():
     global logger
     data = request.get_json()
-    port = data.get('port', 'COM9')
+    port = data.get('port', 'COM5')
     print(f"\n{'='*60}")
     print(f"[API] api_connect called with port={port}")
     print(f"{'='*60}\n")

@@ -43,6 +43,10 @@ CONFIG_SSID="myssid"
 CONFIG_PASSWORD="mypassword"
 # end of ESP32 CSI Collection Tool Config
 ```
+ ### 4. Running the Project - ESP-IDF VS Code Configuration
+- Projeyi çalıştırmak için gerekli adımlar:
+  a. Command Palette (CTRL+Shift+P) > Select Current ESP-IDF Version seçilecek.
+  b. Add VS CODE Configuration Folder seçilecek.
 5. Build and flash the firmware:
 ```bash
 idf.py build
@@ -63,6 +67,7 @@ python web_app.py
 3. Open your browser and navigate to `http://localhost:5000`
 
 ![image](https://github.com/user-attachments/assets/99b9bce7-e8c1-41d6-bc94-7a494d9b1ea7)
+
 
 
 ## FreeRTOS Implementation

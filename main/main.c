@@ -16,8 +16,8 @@
 static const char *TAG = "csi_example";
 
 // WiFi credentials
-#define WIFI_SSID "beemo"
-#define WIFI_PASS "12345678"
+#define WIFI_SSID "Mayzing"
+#define WIFI_PASS "12345689"
 
 // FreeRTOS task handles
 static TaskHandle_t wifi_task_handle = NULL;
