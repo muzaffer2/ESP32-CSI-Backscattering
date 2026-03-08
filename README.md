@@ -44,8 +44,8 @@ CONFIG_PASSWORD="mypassword"
 # end of ESP32 CSI Collection Tool Config
 ```
 4. Running the Project - ESP-IDF VS Code Configuration
-  - Command Palette (CTRL+Shift+P) > Select Current ESP-IDF Version seçilecek.
-  - Add VS CODE Configuration Folder seçilecek.
+  - Command Palette (CTRL+Shift+P) > Select the current ESP-IDF version.
+  - The "Add VS CODE Configuration Folder" option will be selected.
   
 5. Build and flash the firmware:
 ```bash
